@@ -85,12 +85,8 @@ public class DynamicDependencyPlugin implements Plugin<Project> {
                     }
                 }
 
-                println("map : " + resolveExtMap)
-                childProject.configurations.all { DefaultConfiguration configuration ->
-                    if (configuration.dependencies.size() == 0) {
-                        return
-                    }
-
+                println("dependencySubstitution map : " + resolveExtMap)
+                childProject.configurations.all {
                     resolutionStrategy {
                         dependencySubstitution {
                             resolveExtMap.each { key, value ->
