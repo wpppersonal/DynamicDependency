@@ -62,7 +62,7 @@ publishing {
             // 不加group 在跑publishToMavenLocal时会报 groupId can't be empty. (明明要指定group，错误信息确实groupid，很操蛋。 )
             group = 'cn.wps'
             groupId = 'cn.wps'
-            artifactId = 'dynamicdep'
+            artifactId = 'dynamicdependency'
             version = '1.1'
 
             from components.java

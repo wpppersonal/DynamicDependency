@@ -107,4 +107,11 @@ public class DynamicDependencyPlugin implements Plugin<Project> {
         }
 
     }
+
+    static def getArtifactName(Project project, String name) {
+        if (name == null || name == "") {
+            return project.name
+        }
+        return name
+    }
 }
