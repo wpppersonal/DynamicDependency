@@ -20,7 +20,9 @@ public class DynamicDependencyPlugin implements Plugin<Project> {
         // 创建extenstion不能放在afterEvaluate里面，否则找不到 dynamicDependency。
         def rootProject = targetProject.rootProject
         NamedDomainObjectContainer<DependencyResolveExt> dependencyResolveContainer = targetProject.container(DependencyResolveExt.class)
-        rootProject.extensions.add("dynamicDependency", dependencyResolveContainer)
+        targetProject.extensions.add("dynamicDependency", dependencyResolveContainer)
+        // 这个 dependencyResolveContainer 需要在project afterEvaluate之后才会有值.
+//        println("size: " + dependencyResolveContainer.size())
 
         // afterEvalute 发生在 configure 阶段之后。
         targetProject.afterEvaluate {
@@ -34,7 +36,12 @@ public class DynamicDependencyPlugin implements Plugin<Project> {
                         // 这个wps是自定义的字符串
                         wps(MavenPublication) {
                             groupId 'cn.wps'
-                            artifactId proj.name
+                            if (proj.name == "base" && proj.path != ":base") {
+                                def path = proj.path.replace(":", "-").replaceFirst("-", "")
+                                artifactId path
+                            } else {
+                                artifactId proj.name
+                            }
                             version '1.1-SNAPSHOT'
 
                             def file = new File("${proj.buildDir}/outputs/aar/${proj.name}-cn-debug.aar")
@@ -63,45 +70,91 @@ public class DynamicDependencyPlugin implements Plugin<Project> {
             // 替换逻辑
             targetProject.rootProject.getSubprojects().forEach({
                 def childProject = it
-                Map<Project, DependencyResolveExt> resolveExtMap = new HashMap<>()
-
-                childProject.configurations.all { DefaultConfiguration configuration ->
-                    if (configuration.dependencies.size() == 0) {
-                        return
-                    }
-
-                    configuration.dependencies.all { dependency ->
-                        if (dependency instanceof DefaultProjectDependency) {
-                            def depProjectName = dependency.dependencyProject.name
-                            // 当前依赖项是否在定义的替换dsl中，通过resolveExtMap记录。
-                            def dependencyResolveExt = dependencyResolveContainer.find {
-                                it.name == depProjectName
-                            }
-
-                            if (dependencyResolveExt != null) {
-                                resolveExtMap.put(dependency.dependencyProject, dependencyResolveExt)
-                            }
-                        }
-                    }
+                // 判断一下当前工程是不是已经在gradle中申明需要替换的. 如果需要替换则不进行依赖替换.
+                def isExist = dependencyResolveContainer.find {
+                    childProject.path == it.name
                 }
 
-                println("dependencySubstitution map : " + resolveExtMap)
-                childProject.configurations.all {
-                    resolutionStrategy {
-                        dependencySubstitution {
-                            resolveExtMap.each { key, value ->
-                                println("正在替换依赖， 当前工程：" + childProject.name)
-                                println("原依赖： ${key.path}")
-                                println("新依赖： ${value.groupId}:${getArtifactName(key, value.artifactId)}:${value.version}")
-                                substitute project("${key.path}") with module("${value.groupId}:${getArtifactName(key, value.artifactId)}:${value.version}")
-                                println("替换完毕")
+                if (isExist != null) {
+//                    println("当前工程: $childProject 无需执行替换操作")
+                    return
+                }
+
+                childProject.afterEvaluate {
+//                    println("当前project: " + childProject.name)
+                    processRecursive(childProject, dependencyResolveContainer)
+                    if (childProject.getSubprojects().size() != 0) {
+//                        println("第一层子模块不为空")
+                        childProject.getSubprojects().forEach({
+//                            println("当前project： " + it.name)
+                            def secondLevelChildProject = it
+                            processRecursive(secondLevelChildProject, dependencyResolveContainer)
+                            if (secondLevelChildProject.getSubprojects().size() != 0) {
+//                                println("第二层子模块不为空")
+                                secondLevelChildProject.getSubprojects().forEach({
+//                                    println("当前project: " + it.name)
+                                    processRecursive(it, dependencyResolveContainer)
+                                })
                             }
-                        }
+                        })
                     }
                 }
             })
         }
 
+    }
+
+    // 考虑有多层子模块的情况,这里暂时只处理了3层了.
+    def processRecursive(Project childProject, NamedDomainObjectContainer<DependencyResolveExt> dependencyResolveContainer) {
+        // 这里要加afterEvalute,否则该project的configuration就读不到，size为0.
+        childProject.afterEvaluate {
+//            println("size: " + dependencyResolveContainer.size())
+            Map<Project, DependencyResolveExt> resolveExtMap = new HashMap<>()
+
+            childProject.configurations.all { DefaultConfiguration configuration ->
+//                println("当前configuration: " + configuration)
+//                println("$childProject.name 的依赖项有： " + configuration.dependencies.size())
+                if (configuration.dependencies.size() == 0) {
+                    return
+                }
+
+                configuration.dependencies.all { dependency ->
+                    if (dependency instanceof DefaultProjectDependency) {
+                        def depProjectPath = dependency.dependencyProject.path
+//                        println("当前工程： $childProject.name, 依赖项：" + depProjectPath)
+                        // 当前依赖项是否在定义的替换dsl中，通过resolveExtMap记录。
+                        def dependencyResolveExt = dependencyResolveContainer.find {
+                            it.name == depProjectPath
+                        }
+
+//                        println("$depProjectPath 在申明的替换中找到没： " + (dependencyResolveExt != null))
+                        if (dependencyResolveExt != null && childProject.path != depProjectPath) {
+                            resolveExtMap.put(dependency.dependencyProject, dependencyResolveExt)
+                        }
+                    }
+                }
+            }
+
+            println("dependencySubstitution map : " + resolveExtMap)
+            childProject.configurations.all {
+                if (it instanceof DefaultConfiguration) {
+                    if (it.name.contains("lint") || it.name.contains("processor")) {
+                        return
+                    }
+                }
+                resolutionStrategy {
+                    dependencySubstitution {
+                        resolveExtMap.each { key, value ->
+                            println("正在替换依赖， 当前工程：" + childProject.name)
+                            println("原依赖： ${key.path}")
+                            println("新依赖： ${value.groupId}:${getArtifactName(key, value.artifactId)}:${value.version}")
+                            substitute project("${key.path}") with module("${value.groupId}:${getArtifactName(key, value.artifactId)}:${value.version}")
+                            println("替换完毕")
+                        }
+                    }
+                }
+            }
+        }
     }
 
     static def getArtifactName(Project project, String name) {
